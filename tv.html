@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="utf-8">
+    <meta name="referrer" content="strict-origin-when-cross-origin">
+    <title>MM_housing TV</title>
+    <style>
+        html, body { margin: 0; height: 100%; background: #000; overflow: hidden; font-family: Arial, sans-serif; }
+        #player, #player iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+        #msg {
+            position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; flex-direction: column;
+            gap: 18px; color: #EDE6D8; background: #26313f; font-size: 56px; font-weight: bold; text-align: center; padding: 60px;
+        }
+        #msg.error { background: #C9A227; color: #111; }
+        #msg small { font-size: 34px; font-weight: normal; opacity: 0.85; }
+    </style>
+</head>
+<body>
+    <!-- Page intermédiaire de la TV : lecteur YouTube officiel (IFrame API) -->
+    <div id="player"></div>
+    <div id="msg">Chargement…<small></small></div>
+    <script>
+        const params = new URLSearchParams(location.search);
+        const videoId = params.get('v') || '';
+        let volume = Number(params.get('vol') || 60);
+        let player = null;
+        let failed = false;
+        const msg = document.getElementById('msg');
+
+        const ERRORS = {
+            2: 'Lien YouTube invalide.',
+            5: 'Cette vidéo ne peut pas être lue ici.',
+            100: 'Vidéo introuvable ou privée.',
+            101: 'Le propriétaire de la vidéo interdit sa lecture hors de YouTube.',
+            150: 'Le propriétaire de la vidéo interdit sa lecture hors de YouTube.',
+            152: 'YouTube refuse ce lecteur.',
+            153: 'YouTube refuse l’origine du lecteur : héberge tv.html sur ton site (Config.Interactive.tv.pageUrl).',
+        };
+
+        function show(text, detail, isError) {
+            if (failed && !isError) return;
+            msg.firstChild.textContent = text;
+            msg.querySelector('small').textContent = detail || '';
+            msg.classList.toggle('error', !!isError);
+            msg.style.display = 'flex';
+        }
+
+        function fail(text, detail) {
+            failed = true;
+            show(text, detail, true);
+        }
+
+        // Une erreur reste affichée : on ne revient jamais sur un écran noir
+        function hide() { if (!failed) msg.style.display = 'none'; }
+
+        window.onYouTubeIframeAPIReady = function () {
+            player = new YT.Player('player', {
+                videoId,
+                playerVars: {
+                    autoplay: 1, controls: 0, rel: 0, playsinline: 1, modestbranding: 1, iv_load_policy: 3,
+                    origin: location.origin, widget_referrer: location.href,
+                },
+                events: {
+                    onReady: (e) => { e.target.setVolume(volume); e.target.unMute(); e.target.playVideo(); },
+                    onStateChange: (e) => {
+                        if (e.data === YT.PlayerState.PLAYING) { hide(); e.target.unMute(); e.target.setVolume(volume); }
+                        if (e.data === YT.PlayerState.BUFFERING) show('Chargement…');
+                    },
+                    onError: (e) => fail(ERRORS[e.data] || ('Erreur YouTube ' + e.data), 'Code ' + e.data),
+                },
+            });
+            // Lecture automatique bloquée avec le son : on relance en muet
+            setTimeout(() => {
+                if (player && player.getPlayerState && player.getPlayerState() !== YT.PlayerState.PLAYING) {
+                    player.mute(); player.playVideo();
+                }
+            }, 4000);
+        };
+
+        if (!videoId) fail('Aucune vidéo.');
+
+        const api = document.createElement('script');
+        api.src = 'https://www.youtube.com/iframe_api';
+        api.onerror = () => fail('Impossible de joindre YouTube.', 'Connexion bloquée ?');
+        document.head.appendChild(api);
+        setTimeout(() => { if (!player) fail('Le lecteur YouTube ne se charge pas.', 'Vérifie la connexion du client.'); }, 10000);
+        // Toujours pas de lecture au bout de 15 s : on l'affiche au lieu de rester noir
+        setTimeout(() => {
+            if (!failed && player && player.getPlayerState && player.getPlayerState() !== YT.PlayerState.PLAYING) {
+                fail('La vidéo ne démarre pas.', 'Si une erreur YouTube est apparue, héberge tv.html (Config.Interactive.tv.pageUrl).');
+            }
+        }, 15000);
+
+        // Volume envoyé par le jeu (SendDuiMessage) selon la distance à l'écran
+        window.addEventListener('message', (event) => {
+            let data = event.data;
+            if (typeof data === 'string') { try { data = JSON.parse(data); } catch (e) { return; } }
+            if (data && data.type === 'volume') {
+                volume = Math.max(0, Math.min(100, Number(data.value) || 0));
+                if (player && player.setVolume) player.setVolume(volume);
+            }
+        });
+    </script>
+</body>
+</html>
