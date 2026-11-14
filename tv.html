@@ -10,6 +10,7 @@
         #msg {
             position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; flex-direction: column;
             gap: 18px; color: #EDE6D8; background: #26313f; font-size: 56px; font-weight: bold; text-align: center; padding: 60px;
+            pointer-events: none; /* ne bloque jamais les clics sur la vidéo */
         }
         #msg.error { background: #C9A227; color: #111; }
         #msg small { font-size: 34px; font-weight: normal; opacity: 0.85; }
@@ -54,6 +55,7 @@
         function hide() { if (!failed) msg.style.display = 'none'; }
 
         window.onYouTubeIframeAPIReady = function () {
+            if (!videoId) return;
             player = new YT.Player('player', {
                 videoId,
                 playerVars: {
@@ -61,10 +63,11 @@
                     origin: location.origin, widget_referrer: location.href,
                 },
                 events: {
-                    onReady: (e) => { e.target.setVolume(volume); e.target.unMute(); e.target.playVideo(); },
+                    // Lecteur prêt : on retire l'écran de chargement, la vidéo (ou son aperçu) s'affiche
+                    onReady: (e) => { hide(); e.target.setVolume(volume); e.target.unMute(); e.target.playVideo(); },
                     onStateChange: (e) => {
                         if (e.data === YT.PlayerState.PLAYING) { hide(); e.target.unMute(); e.target.setVolume(volume); }
-                        if (e.data === YT.PlayerState.BUFFERING) show('Chargement…');
+
                     },
                     onError: (e) => fail(ERRORS[e.data] || ('Erreur YouTube ' + e.data), 'Code ' + e.data),
                 },
@@ -77,17 +80,17 @@
             }, 4000);
         };
 
-        if (!videoId) fail('Aucune vidéo.');
+        if (!videoId) fail('Aucune vidéo.', 'Ajoute ?v=IDENTIFIANT à l’adresse pour tester.');
 
         const api = document.createElement('script');
         api.src = 'https://www.youtube.com/iframe_api';
         api.onerror = () => fail('Impossible de joindre YouTube.', 'Connexion bloquée ?');
         document.head.appendChild(api);
-        setTimeout(() => { if (!player) fail('Le lecteur YouTube ne se charge pas.', 'Vérifie la connexion du client.'); }, 10000);
+        setTimeout(() => { if (!player && videoId) fail('Le lecteur YouTube ne se charge pas.', 'Vérifie la connexion du client.'); }, 10000);
         // Toujours pas de lecture au bout de 15 s : on l'affiche au lieu de rester noir
         setTimeout(() => {
             if (!failed && player && player.getPlayerState && player.getPlayerState() !== YT.PlayerState.PLAYING) {
-                fail('La vidéo ne démarre pas.', 'Si une erreur YouTube est apparue, héberge tv.html (Config.Interactive.tv.pageUrl).');
+                fail('La vidéo ne démarre pas.', 'Lecture automatique bloquée, ou vidéo refusée par YouTube.');
             }
         }, 15000);
 
