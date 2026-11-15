@@ -64,7 +64,7 @@
         }
 
         // Contrôle commun : play(t), pause(), seek(t), setVolume(0-100)
-        let ctl = { play() {}, pause() {}, seek() {}, setVolume() {} };
+        let ctl = { play() {}, pause() {}, seek() {}, setVolume() {}, getTime() { return null; }, getDuration() { return null; }, isPlaying() { return false; } };
 
         const ERRORS = {
             2: 'Lien invalide.', 5: 'Lecture impossible ici.', 100: 'Vidéo introuvable ou privée.',
@@ -94,6 +94,9 @@
                     ctl = {
                         play(t) { if (typeof t === 'number') p.seekTo(t, true); p.playVideo(); },
                         pause() { p.pauseVideo(); }, seek(t) { p.seekTo(t, true); }, setVolume(v) { p.setVolume(v); },
+                        getTime() { return p.getCurrentTime ? p.getCurrentTime() : null; },
+                        getDuration() { return p.getDuration ? p.getDuration() : null; },
+                        isPlaying() { return p.getPlayerState && p.getPlayerState() === YT.PlayerState.PLAYING; },
                     };
                 };
                 loadScript('https://www.youtube.com/iframe_api').catch(() => fail('Impossible de joindre YouTube.'));
@@ -107,6 +110,8 @@
                 ctl = {
                     play(t) { if (typeof t === 'number' && !channel) p.seek(t); p.play(); }, pause() { p.pause(); },
                     seek(t) { if (!channel) p.seek(t); }, setVolume(v) { p.setVolume(v / 100); },
+                    getTime() { return channel ? null : p.getCurrentTime(); }, getDuration() { return channel ? null : p.getDuration(); },
+                    isPlaying() { return !p.isPaused(); },
                 };
             },
             kick() {
@@ -119,9 +124,13 @@
                 const p = new Vimeo.Player('player', { id: Number(id), autoplay: true, controls: false, responsive: false, width: 1280 });
                 p.ready().then(() => { hide(); p.setVolume(volume / 100); if (start) p.setCurrentTime(start); p.play().catch(() => {}); })
                     .catch(() => fail('Vidéo Vimeo indisponible.'));
+                let vt = null, vd = null, vplaying = false;
+                p.on('timeupdate', (e) => { vt = e.seconds; vd = e.duration; });
+                p.on('play', () => { vplaying = true; }); p.on('pause', () => { vplaying = false; });
                 ctl = {
                     play(t) { if (typeof t === 'number') p.setCurrentTime(t); p.play().catch(() => {}); }, pause() { p.pause(); },
                     seek(t) { p.setCurrentTime(t); }, setVolume(v) { p.setVolume(v / 100); },
+                    getTime() { return vt; }, getDuration() { return vd; }, isPlaying() { return vplaying; },
                 };
             },
             streamable() {
@@ -134,9 +143,14 @@
                 try { await loadScript('https://w.soundcloud.com/player/api.js'); } catch (e) { return hide(); }
                 const w = SC.Widget(f);
                 w.bind(SC.Widget.Events.READY, () => { hide(); w.setVolume(volume); if (start) w.seekTo(start * 1000); w.play(); });
+                let st = null, sd = null, splaying = false;
+                w.bind(SC.Widget.Events.PLAY_PROGRESS, (e) => { st = e.currentPosition / 1000; splaying = true; });
+                w.bind(SC.Widget.Events.PAUSE, () => { splaying = false; });
+                w.bind(SC.Widget.Events.READY, () => w.getDuration((d) => { sd = d / 1000; }));
                 ctl = {
                     play(t) { if (typeof t === 'number') w.seekTo(t * 1000); w.play(); }, pause() { w.pause(); },
                     seek(t) { w.seekTo(t * 1000); }, setVolume(v) { w.setVolume(v); },
+                    getTime() { return st; }, getDuration() { return sd; }, isPlaying() { return splaying; },
                 };
             },
             async video() {
@@ -157,6 +171,8 @@
                 ctl = {
                     play(t) { if (typeof t === 'number') v.currentTime = t; v.play().catch(() => {}); }, pause() { v.pause(); },
                     seek(t) { v.currentTime = t; }, setVolume(x) { v.volume = x / 100; },
+                    getTime() { return v.currentTime; }, getDuration() { return isFinite(v.duration) ? v.duration : null; },
+                    isPlaying() { return !v.paused; },
                 };
             },
         };
@@ -172,6 +188,18 @@
             sources[type]();
         }
 
+        // Recalage sur l'horloge du serveur (tous les joueurs au même moment de la vidéo)
+        function resync(d) {
+            if (d.paused) { if (ctl.isPlaying()) { wantPaused = true; ctl.pause(); } return; }
+            const cur = ctl.getTime();
+            if (cur === null || cur === undefined) return;
+            // Une pub est en cours si la durée du lecteur ne correspond pas à celle de la vidéo : on attend
+            const dur = ctl.getDuration();
+            if (d.duration && dur && Math.abs(dur - d.duration) > 3) return;
+            if (!ctl.isPlaying()) { wantPaused = false; ctl.play(d.t); return; }
+            if (Math.abs(cur - d.t) > (d.tolerance || 2)) ctl.seek(d.t);
+        }
+
         // Ordres du jeu (SendDuiMessage)
         window.addEventListener('message', (event) => {
             let d = event.data;
@@ -182,6 +210,7 @@
                 else if (d.type === 'pause') { wantPaused = true; ctl.pause(); }
                 else if (d.type === 'play') { wantPaused = false; ctl.play(typeof d.t === 'number' ? d.t : undefined); }
                 else if (d.type === 'seek') ctl.seek(Number(d.t) || 0);
+                else if (d.type === 'sync') resync(d);
             } catch (e) { /* lecteur pas encore prêt */ }
         });
     </script>
