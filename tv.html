@@ -3,41 +3,37 @@
 <head>
     <meta charset="utf-8">
     <meta name="referrer" content="strict-origin-when-cross-origin">
-    <title>MM_housing TV</title>
+    <title>MM TV</title>
     <style>
         html, body { margin: 0; height: 100%; background: #000; overflow: hidden; font-family: Arial, sans-serif; }
-        #player, #player iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+        #player, #player iframe, video, iframe.full { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+        video { object-fit: contain; background: #000; }
         #msg {
             position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; flex-direction: column;
             gap: 18px; color: #EDE6D8; background: #26313f; font-size: 56px; font-weight: bold; text-align: center; padding: 60px;
-            pointer-events: none; /* ne bloque jamais les clics sur la vidéo */
+            pointer-events: none;
         }
         #msg.error { background: #C9A227; color: #111; }
         #msg small { font-size: 34px; font-weight: normal; opacity: 0.85; }
     </style>
 </head>
 <body>
-    <!-- Page intermédiaire de la TV : lecteur YouTube officiel (IFrame API) -->
+    <!-- Lecteur multi-sources de MM_smarttv / MM_housing.
+         Paramètres : t = yt | twitch | kick | vimeo | streamable | sc | video, puis v (identifiant), c (chaîne) ou u (lien),
+         start (secondes) et vol (0-100). Sans t : YouTube (compatibilité). -->
     <div id="player"></div>
     <div id="msg">Chargement…<small></small></div>
     <script>
-        const params = new URLSearchParams(location.search);
-        const videoId = params.get('v') || '';
-        let volume = Number(params.get('vol') || 60);
-        const start = Math.max(0, Math.floor(Number(params.get('start') || 0)));
-        let player = null;
-        let failed = false;
+        const q = new URLSearchParams(location.search);
+        const type = q.get('t') || 'yt';
+        const id = q.get('v') || '';
+        const channel = q.get('c') || '';
+        const link = q.get('u') || '';
+        const start = Math.max(0, Math.floor(Number(q.get('start') || 0)));
+        let volume = Math.max(0, Math.min(100, Number(q.get('vol') || 60)));
+        const host = document.getElementById('player');
         const msg = document.getElementById('msg');
-
-        const ERRORS = {
-            2: 'Lien YouTube invalide.',
-            5: 'Cette vidéo ne peut pas être lue ici.',
-            100: 'Vidéo introuvable ou privée.',
-            101: 'Le propriétaire de la vidéo interdit sa lecture hors de YouTube.',
-            150: 'Le propriétaire de la vidéo interdit sa lecture hors de YouTube.',
-            152: 'YouTube refuse ce lecteur.',
-            153: 'YouTube refuse l’origine du lecteur : héberge tv.html sur ton site (Config.Interactive.tv.pageUrl).',
-        };
+        let failed = false;
 
         function show(text, detail, isError) {
             if (failed && !isError) return;
@@ -46,81 +42,140 @@
             msg.classList.toggle('error', !!isError);
             msg.style.display = 'flex';
         }
-
-        function fail(text, detail) {
-            failed = true;
-            show(text, detail, true);
+        function fail(text, detail) { failed = true; show(text, detail, true); }
+        function hide() { if (!failed) msg.style.display = 'none'; }
+        function loadScript(src) {
+            return new Promise((resolve, reject) => {
+                const s = document.createElement('script');
+                s.src = src; s.onload = resolve; s.onerror = () => reject(new Error(src));
+                document.head.appendChild(s);
+            });
+        }
+        function frame(src) {
+            const f = document.createElement('iframe');
+            f.className = 'full';
+            f.allow = 'autoplay; encrypted-media; fullscreen';
+            f.referrerPolicy = 'strict-origin-when-cross-origin';
+            f.src = src;
+            document.body.insertBefore(f, msg);
+            return f;
         }
 
-        // Une erreur reste affichée : on ne revient jamais sur un écran noir
-        function hide() { if (!failed) msg.style.display = 'none'; }
+        // Contrôle commun : play(t), pause(), seek(t), setVolume(0-100)
+        let ctl = { play() {}, pause() {}, seek() {}, setVolume() {} };
 
-        window.onYouTubeIframeAPIReady = function () {
-            if (!videoId) return;
-            player = new YT.Player('player', {
-                videoId,
-                playerVars: {
-                    autoplay: 1, controls: 0, rel: 0, playsinline: 1, modestbranding: 1, iv_load_policy: 3, start,
-                    origin: location.origin, widget_referrer: location.href,
-                },
-                events: {
-                    // Lecteur prêt : on retire l'écran de chargement, la vidéo (ou son aperçu) s'affiche
-                    onReady: (e) => { hide(); e.target.setVolume(volume); e.target.unMute(); e.target.playVideo(); },
-                    onStateChange: (e) => {
-                        if (e.data === YT.PlayerState.PLAYING) { hide(); e.target.unMute(); e.target.setVolume(volume); }
-
-                    },
-                    onError: (e) => fail(ERRORS[e.data] || ('Erreur YouTube ' + e.data), 'Code ' + e.data),
-                },
-            });
-            // Lecture automatique bloquée avec le son : on relance en muet
-            setTimeout(() => {
-                if (player && player.getPlayerState && player.getPlayerState() !== YT.PlayerState.PLAYING) {
-                    player.mute(); player.playVideo();
-                }
-            }, 4000);
+        const ERRORS = {
+            2: 'Lien invalide.', 5: 'Lecture impossible ici.', 100: 'Vidéo introuvable ou privée.',
+            101: 'Le propriétaire interdit la lecture hors de YouTube.', 150: 'Le propriétaire interdit la lecture hors de YouTube.',
+            153: 'YouTube refuse l’origine du lecteur : héberge tv.html sur ton site.',
         };
 
-        if (!videoId) {
-            if (typeof GetParentResourceName === 'function') {
-                // Dans FiveM sans vidéo : page totalement invisible
-                document.documentElement.style.background = 'transparent';
-                document.body.style.background = 'transparent';
-                msg.style.display = 'none';
-                failed = true;
-            } else {
-                fail('Aucune vidéo.', 'Ajoute ?v=IDENTIFIANT à l’adresse pour tester.');
-            }
+        const sources = {
+            yt() {
+                if (!id) return fail('Aucune vidéo.');
+                window.onYouTubeIframeAPIReady = () => {
+                    const p = new YT.Player('player', {
+                        videoId: id,
+                        playerVars: { autoplay: 1, controls: 0, rel: 0, playsinline: 1, modestbranding: 1, iv_load_policy: 3, start,
+                            origin: location.origin, widget_referrer: location.href },
+                        events: {
+                            onReady: (e) => { hide(); e.target.setVolume(volume); e.target.unMute(); e.target.playVideo(); },
+                            onStateChange: (e) => { if (e.data === YT.PlayerState.PLAYING) { hide(); e.target.unMute(); e.target.setVolume(volume); } },
+                            onError: (e) => fail(ERRORS[e.data] || ('Erreur YouTube ' + e.data), 'Code ' + e.data),
+                        },
+                    });
+                    ctl = {
+                        play(t) { if (typeof t === 'number') p.seekTo(t, true); p.playVideo(); },
+                        pause() { p.pauseVideo(); }, seek(t) { p.seekTo(t, true); }, setVolume(v) { p.setVolume(v); },
+                    };
+                };
+                loadScript('https://www.youtube.com/iframe_api').catch(() => fail('Impossible de joindre YouTube.'));
+            },
+            async twitch() {
+                try { await loadScript('https://player.twitch.tv/js/embed/v1.js'); } catch (e) { return fail('Impossible de joindre Twitch.'); }
+                const opts = { width: '100%', height: '100%', parent: [location.hostname], autoplay: true, muted: false };
+                if (channel) opts.channel = channel; else opts.video = id;
+                const p = new Twitch.Player('player', opts);
+                p.addEventListener(Twitch.Player.READY, () => { hide(); p.setMuted(false); p.setVolume(volume / 100); if (id && start) p.seek(start); });
+                ctl = {
+                    play(t) { if (typeof t === 'number' && !channel) p.seek(t); p.play(); }, pause() { p.pause(); },
+                    seek(t) { if (!channel) p.seek(t); }, setVolume(v) { p.setVolume(v / 100); },
+                };
+            },
+            kick() {
+                if (!channel) return fail('Chaîne Kick manquante.');
+                frame('https://player.kick.com/' + encodeURIComponent(channel) + '?autoplay=true&muted=false');
+                hide();
+            },
+            async vimeo() {
+                try { await loadScript('https://player.vimeo.com/api/player.js'); } catch (e) { return fail('Impossible de joindre Vimeo.'); }
+                const p = new Vimeo.Player('player', { id: Number(id), autoplay: true, controls: false, responsive: false, width: 1280 });
+                p.ready().then(() => { hide(); p.setVolume(volume / 100); if (start) p.setCurrentTime(start); p.play().catch(() => {}); })
+                    .catch(() => fail('Vidéo Vimeo indisponible.'));
+                ctl = {
+                    play(t) { if (typeof t === 'number') p.setCurrentTime(t); p.play().catch(() => {}); }, pause() { p.pause(); },
+                    seek(t) { p.setCurrentTime(t); }, setVolume(v) { p.setVolume(v / 100); },
+                };
+            },
+            streamable() {
+                if (!id) return fail('Vidéo Streamable manquante.');
+                frame('https://streamable.com/e/' + encodeURIComponent(id) + '?autoplay=1&nocontrols=1' + (start ? '&t=' + start : ''));
+                hide();
+            },
+            async sc() {
+                const f = frame('https://w.soundcloud.com/player/?url=' + encodeURIComponent(link) + '&auto_play=true&visual=true&show_comments=false');
+                try { await loadScript('https://w.soundcloud.com/player/api.js'); } catch (e) { return hide(); }
+                const w = SC.Widget(f);
+                w.bind(SC.Widget.Events.READY, () => { hide(); w.setVolume(volume); if (start) w.seekTo(start * 1000); w.play(); });
+                ctl = {
+                    play(t) { if (typeof t === 'number') w.seekTo(t * 1000); w.play(); }, pause() { w.pause(); },
+                    seek(t) { w.seekTo(t * 1000); }, setVolume(v) { w.setVolume(v); },
+                };
+            },
+            async video() {
+                if (!/^https:\/\//.test(link)) return fail('Lien vidéo invalide.');
+                const v = document.createElement('video');
+                v.autoplay = true; v.playsInline = true; v.volume = volume / 100;
+                document.body.insertBefore(v, msg);
+                if (/\.m3u8(\?|$)/i.test(link) && !v.canPlayType('application/vnd.apple.mpegurl')) {
+                    try { await loadScript('https://cdn.jsdelivr.net/npm/hls.js@1.5.7/dist/hls.min.js'); } catch (e) { return fail('Lecteur HLS indisponible.'); }
+                    const hls = new Hls(); hls.loadSource(link); hls.attachMedia(v);
+                } else {
+                    v.src = link;
+                }
+                v.addEventListener('loadedmetadata', () => { if (start) v.currentTime = start; });
+                v.addEventListener('playing', hide);
+                v.addEventListener('error', () => fail('Vidéo illisible.', 'Format ou lien non pris en charge.'));
+                v.play().catch(() => { v.muted = true; v.play().catch(() => {}); });
+                ctl = {
+                    play(t) { if (typeof t === 'number') v.currentTime = t; v.play().catch(() => {}); }, pause() { v.pause(); },
+                    seek(t) { v.currentTime = t; }, setVolume(x) { v.volume = x / 100; },
+                };
+            },
+        };
+
+        if (!sources[type]) fail('Source inconnue.');
+        else if (type === 'yt' && !id && typeof GetParentResourceName === 'function') {
+            // Dans FiveM sans vidéo : page invisible
+            document.documentElement.style.background = 'transparent';
+            document.body.style.background = 'transparent';
+            msg.style.display = 'none';
+            failed = true;
+        } else {
+            sources[type]();
         }
 
-        const api = document.createElement('script');
-        api.src = 'https://www.youtube.com/iframe_api';
-        api.onerror = () => fail('Impossible de joindre YouTube.', 'Connexion bloquée ?');
-        document.head.appendChild(api);
-        setTimeout(() => { if (!player && videoId) fail('Le lecteur YouTube ne se charge pas.', 'Vérifie la connexion du client.'); }, 10000);
-        // Toujours pas de lecture au bout de 15 s : on l'affiche au lieu de rester noir
-        setTimeout(() => {
-            if (!failed && player && player.getPlayerState && player.getPlayerState() !== YT.PlayerState.PLAYING) {
-                fail('La vidéo ne démarre pas.', 'Lecture automatique bloquée, ou vidéo refusée par YouTube.');
-            }
-        }, 15000);
-
-        // Volume envoyé par le jeu (SendDuiMessage) selon la distance à l'écran
+        // Ordres du jeu (SendDuiMessage)
         window.addEventListener('message', (event) => {
-            let data = event.data;
-            if (typeof data === 'string') { try { data = JSON.parse(data); } catch (e) { return; } }
-            if (!data || !player) return;
-            if (data.type === 'volume') {
-                volume = Math.max(0, Math.min(100, Number(data.value) || 0));
-                if (player.setVolume) player.setVolume(volume);
-            } else if (data.type === 'pause' && player.pauseVideo) {
-                player.pauseVideo();
-            } else if (data.type === 'play' && player.playVideo) {
-                if (typeof data.t === 'number' && player.seekTo) player.seekTo(data.t, true);
-                player.playVideo();
-            } else if (data.type === 'seek' && player.seekTo) {
-                player.seekTo(Number(data.t) || 0, true);
-            }
+            let d = event.data;
+            if (typeof d === 'string') { try { d = JSON.parse(d); } catch (e) { return; } }
+            if (!d || !d.type) return;
+            try {
+                if (d.type === 'volume') { volume = Math.max(0, Math.min(100, Number(d.value) || 0)); ctl.setVolume(volume); }
+                else if (d.type === 'pause') ctl.pause();
+                else if (d.type === 'play') ctl.play(typeof d.t === 'number' ? d.t : undefined);
+                else if (d.type === 'seek') ctl.seek(Number(d.t) || 0);
+            } catch (e) { /* lecteur pas encore prêt */ }
         });
     </script>
 </body>
