@@ -81,7 +81,17 @@
             }, 4000);
         };
 
-        if (!videoId) fail('Aucune vidéo.', 'Ajoute ?v=IDENTIFIANT à l’adresse pour tester.');
+        if (!videoId) {
+            if (typeof GetParentResourceName === 'function') {
+                // Dans FiveM sans vidéo : page totalement invisible
+                document.documentElement.style.background = 'transparent';
+                document.body.style.background = 'transparent';
+                msg.style.display = 'none';
+                failed = true;
+            } else {
+                fail('Aucune vidéo.', 'Ajoute ?v=IDENTIFIANT à l’adresse pour tester.');
+            }
+        }
 
         const api = document.createElement('script');
         api.src = 'https://www.youtube.com/iframe_api';
