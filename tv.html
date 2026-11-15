@@ -31,6 +31,8 @@
         const link = q.get('u') || '';
         const start = Math.max(0, Math.floor(Number(q.get('start') || 0)));
         let volume = Math.max(0, Math.min(100, Number(q.get('vol') || 60)));
+        const noCookie = q.get('nc') === '1';
+        let wantPaused = false; // vrai seulement quand le jeu demande la pause
         const host = document.getElementById('player');
         const msg = document.getElementById('msg');
         let failed = false;
@@ -76,11 +78,16 @@
                 window.onYouTubeIframeAPIReady = () => {
                     const p = new YT.Player('player', {
                         videoId: id, width: '100%', height: '100%',
+                        host: noCookie ? 'https://www.youtube-nocookie.com' : 'https://www.youtube.com',
                         playerVars: { autoplay: 1, controls: 0, rel: 0, playsinline: 1, modestbranding: 1, iv_load_policy: 3, start,
                             origin: location.origin, widget_referrer: location.href },
                         events: {
                             onReady: (e) => { hide(); e.target.setVolume(volume); e.target.unMute(); e.target.playVideo(); },
-                            onStateChange: (e) => { if (e.data === YT.PlayerState.PLAYING) { hide(); e.target.unMute(); e.target.setVolume(volume); } },
+                            onStateChange: (e) => {
+                                if (e.data === YT.PlayerState.PLAYING) { hide(); e.target.unMute(); e.target.setVolume(volume); }
+                                // Un clic « Passer la pub » tombé sur la vidéo l'a mise en pause : on relance
+                                if (e.data === YT.PlayerState.PAUSED && !wantPaused) setTimeout(() => e.target.playVideo(), 300);
+                            },
                             onError: (e) => fail(ERRORS[e.data] || ('Erreur YouTube ' + e.data), 'Code ' + e.data),
                         },
                     });
@@ -172,8 +179,8 @@
             if (!d || !d.type) return;
             try {
                 if (d.type === 'volume') { volume = Math.max(0, Math.min(100, Number(d.value) || 0)); ctl.setVolume(volume); }
-                else if (d.type === 'pause') ctl.pause();
-                else if (d.type === 'play') ctl.play(typeof d.t === 'number' ? d.t : undefined);
+                else if (d.type === 'pause') { wantPaused = true; ctl.pause(); }
+                else if (d.type === 'play') { wantPaused = false; ctl.play(typeof d.t === 'number' ? d.t : undefined); }
                 else if (d.type === 'seek') ctl.seek(Number(d.t) || 0);
             } catch (e) { /* lecteur pas encore prêt */ }
         });
